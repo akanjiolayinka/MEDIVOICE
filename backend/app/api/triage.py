@@ -1,19 +1,18 @@
 from fastapi import APIRouter
-from fastapi.responses import JSONResponse
+
+from app.schemas.medical import MedicalState, TriageResult
+from app.services.triage import rules
 
 router = APIRouter()
 
 
-@router.post("/api/triage/assess")
-async def assess():
+@router.post("/api/triage/assess", response_model=TriageResult)
+async def assess(state: MedicalState) -> TriageResult:
     """
-    STUB — the deterministic safety/triage engine is Phase 6 of the master
-    build plan. See backend/app/services/triage/.
+    Real, deterministic safety/triage assessment (Phase 6) — needs no
+    external credentials, so this works today. Takes a MedicalState (either
+    produced by the real agent once Phase 4 is configured, or a labeled
+    demo fixture from the frontend) and returns an honest, rule-based
+    urgency assessment. Never a diagnosis.
     """
-    return JSONResponse(
-        status_code=501,
-        content={
-            "error": "not_implemented",
-            "message": "The safety/triage engine isn't implemented yet (Phase 6).",
-        },
-    )
+    return rules.assess(state)

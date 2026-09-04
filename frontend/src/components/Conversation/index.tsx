@@ -11,10 +11,15 @@ import ConsultationSummary from "@/components/ConsultationSummary";
 import Badge from "@/components/ui/Badge";
 import ModeTabs, { type Mode } from "@/components/Conversation/ModeTabs";
 import ScenarioPicker from "@/components/Conversation/ScenarioPicker";
-import { uploadVoice } from "@/lib/api";
+import { uploadVoice, sendMessage, assessTriage } from "@/lib/api";
 import { getOrCreateSessionId } from "@/lib/session";
 import { demoFixtures } from "@/content/demoFixtures";
-import type { ConversationPhase, DemoFixture } from "@/lib/types";
+import type {
+  ConversationPhase,
+  DemoFixture,
+  MedicalState,
+  TriageResult as TriageResultType,
+} from "@/lib/types";
 
 interface State {
   mode: Mode;
@@ -22,18 +27,33 @@ interface State {
   transcript: string | null;
   languages: string[];
   errorMessage: string | null;
+  notConfiguredService: string | null;
   isFixture: boolean;
   recordedBlob: Blob | null;
+  medicalState: MedicalState | null;
+  triage: TriageResultType | null;
+  agentReply: string | null;
 }
 
 type Action =
   | { type: "SET_MODE"; mode: Mode }
   | { type: "START_RECORDING" }
   | { type: "START_UPLOAD"; blob: Blob }
-  | { type: "TRANSCRIBED"; transcript: string; languages: string[] }
-  | { type: "NOT_CONFIGURED"; message: string }
+  | { type: "PLAY_FIXTURE" }
+  | {
+      type: "ASSESSING";
+      transcript: string;
+      languages: string[];
+      isFixture: boolean;
+    }
+  | {
+      type: "ASSESSED";
+      medicalState: MedicalState;
+      triage: TriageResultType;
+      agentReply: string;
+    }
+  | { type: "NOT_CONFIGURED"; service: string; message: string }
   | { type: "ERROR"; message: string }
-  | { type: "PLAY_FIXTURE"; fixture: DemoFixture }
   | { type: "RESET" };
 
 const initialState: State = {
@@ -42,8 +62,12 @@ const initialState: State = {
   transcript: null,
   languages: [],
   errorMessage: null,
+  notConfiguredService: null,
   isFixture: false,
   recordedBlob: null,
+  medicalState: null,
+  triage: null,
+  agentReply: null,
 };
 
 function reducer(state: State, action: Action): State {
@@ -53,30 +77,34 @@ function reducer(state: State, action: Action): State {
     case "START_RECORDING":
       return { ...state, phase: "recording" };
     case "START_UPLOAD":
+      return { ...state, phase: "uploading", recordedBlob: action.blob, isFixture: false };
+    case "PLAY_FIXTURE":
+      return { ...state, phase: "uploading", isFixture: true, recordedBlob: null };
+    case "ASSESSING":
       return {
         ...state,
-        phase: "uploading",
-        recordedBlob: action.blob,
-        isFixture: false,
-      };
-    case "TRANSCRIBED":
-      return {
-        ...state,
-        phase: "transcribed",
+        phase: "assessing",
         transcript: action.transcript,
         languages: action.languages,
+        isFixture: action.isFixture,
       };
-    case "NOT_CONFIGURED":
-      return { ...state, phase: "not_configured", errorMessage: action.message };
-    case "ERROR":
-      return { ...state, phase: "error", errorMessage: action.message };
-    case "PLAY_FIXTURE":
+    case "ASSESSED":
       return {
         ...state,
-        phase: "uploading",
-        isFixture: true,
-        recordedBlob: null,
+        phase: "assessed",
+        medicalState: action.medicalState,
+        triage: action.triage,
+        agentReply: action.agentReply,
       };
+    case "NOT_CONFIGURED":
+      return {
+        ...state,
+        phase: "not_configured",
+        notConfiguredService: action.service,
+        errorMessage: action.message,
+      };
+    case "ERROR":
+      return { ...state, phase: "error", errorMessage: action.message };
     case "RESET":
       return { ...initialState, mode: state.mode };
     default:
@@ -84,9 +112,9 @@ function reducer(state: State, action: Action): State {
   }
 }
 
-const processingLabels: Record<string, string> = {
-  recording: "Listening…",
+const PROCESSING_LABELS: Record<string, string> = {
   uploading: "Understanding your speech…",
+  assessing: "Thinking about what to ask next…",
 };
 
 export default function Conversation() {
@@ -103,39 +131,82 @@ export default function Conversation() {
 
   const handleRecorded = async (blob: Blob) => {
     dispatch({ type: "START_UPLOAD", blob });
-    const outcome = await uploadVoice(sessionIdRef.current, blob);
-    if (outcome.kind === "transcribed") {
+
+    const voiceOutcome = await uploadVoice(sessionIdRef.current, blob);
+    if (voiceOutcome.kind === "not_configured") {
       dispatch({
-        type: "TRANSCRIBED",
-        transcript: outcome.result.transcript,
-        languages: outcome.result.languages,
+        type: "NOT_CONFIGURED",
+        service: voiceOutcome.error.service,
+        message: voiceOutcome.error.message,
       });
-    } else if (outcome.kind === "not_configured") {
-      dispatch({ type: "NOT_CONFIGURED", message: outcome.error.message });
-    } else {
-      dispatch({ type: "ERROR", message: outcome.message });
+      return;
     }
+    if (voiceOutcome.kind === "error") {
+      dispatch({ type: "ERROR", message: voiceOutcome.message });
+      return;
+    }
+
+    dispatch({
+      type: "ASSESSING",
+      transcript: voiceOutcome.result.transcript,
+      languages: voiceOutcome.result.languages,
+      isFixture: false,
+    });
+
+    const convoOutcome = await sendMessage(sessionIdRef.current, voiceOutcome.result.transcript);
+    if (convoOutcome.kind === "not_configured") {
+      dispatch({
+        type: "NOT_CONFIGURED",
+        service: convoOutcome.error.service,
+        message: convoOutcome.error.message,
+      });
+      return;
+    }
+    if (convoOutcome.kind === "error") {
+      dispatch({ type: "ERROR", message: convoOutcome.message });
+      return;
+    }
+
+    dispatch({
+      type: "ASSESSED",
+      medicalState: convoOutcome.result.medical_state,
+      triage: convoOutcome.result.triage,
+      agentReply: convoOutcome.result.response_text,
+    });
   };
 
   const handleFixtureSelect = (fixture: DemoFixture) => {
-    dispatch({ type: "PLAY_FIXTURE", fixture });
-    fixtureTimeout.current = setTimeout(() => {
+    dispatch({ type: "PLAY_FIXTURE" });
+    fixtureTimeout.current = setTimeout(async () => {
       dispatch({
-        type: "TRANSCRIBED",
+        type: "ASSESSING",
         transcript: fixture.result.transcript,
         languages: fixture.result.languages,
+        isFixture: true,
       });
+
+      try {
+        const triage = await assessTriage(fixture.medicalState);
+        dispatch({
+          type: "ASSESSED",
+          medicalState: fixture.medicalState,
+          triage,
+          agentReply: fixture.agentReply,
+        });
+      } catch {
+        dispatch({
+          type: "ERROR",
+          message: "We couldn't reach MediVoice's servers. Check your connection and try again.",
+        });
+      }
     }, 900);
   };
 
   return (
     <div className="flex flex-col items-center gap-8">
-      <ModeTabs
-        mode={state.mode}
-        onChange={(mode) => dispatch({ type: "SET_MODE", mode })}
-      />
+      <ModeTabs mode={state.mode} onChange={(mode) => dispatch({ type: "SET_MODE", mode })} />
 
-      {state.mode === "live" && state.phase === "idle" && (
+      {state.mode === "live" && (state.phase === "idle" || state.phase === "recording") && (
         <VoiceRecorder
           onRecorded={handleRecorded}
           onPermissionDenied={() =>
@@ -149,38 +220,28 @@ export default function Conversation() {
         />
       )}
 
-      {state.mode === "live" && state.phase === "recording" && (
-        <VoiceRecorder
-          onRecorded={handleRecorded}
-          onPermissionDenied={() =>
-            dispatch({ type: "ERROR", message: "Microphone access was denied." })
-          }
-          onUnavailable={(message) => dispatch({ type: "ERROR", message })}
-        />
-      )}
-
       {state.mode === "demo" && state.phase === "idle" && (
         <ScenarioPicker fixtures={demoFixtures} onSelect={handleFixtureSelect} />
       )}
 
-      {state.phase === "uploading" && (
+      {(state.phase === "uploading" || state.phase === "assessing") && (
         <div className="flex flex-col items-center gap-2">
           {state.isFixture && <Badge tone="accent">Fixture — pipeline replay</Badge>}
-          <p className="text-sm text-muted-500">
-            {processingLabels.uploading}
-          </p>
+          <p className="text-sm text-muted-500">{PROCESSING_LABELS[state.phase]}</p>
         </div>
       )}
 
       {state.phase === "not_configured" && (
         <div className="flex w-full max-w-md flex-col items-center gap-4">
           <NotConfiguredBanner
-            service="Sahara"
-            message={
-              state.errorMessage ??
-              "Sahara isn't configured yet — add SAHARA_API_KEY to enable real transcription."
-            }
+            service={state.notConfiguredService ?? "Service"}
+            message={state.errorMessage ?? "This service isn't configured yet."}
           />
+          {state.transcript && (
+            <p className="max-w-sm text-center text-sm italic text-muted-500">
+              &ldquo;{state.transcript}&rdquo;
+            </p>
+          )}
           <button
             type="button"
             onClick={() => dispatch({ type: "SET_MODE", mode: "demo" })}
@@ -193,9 +254,7 @@ export default function Conversation() {
 
       {state.phase === "error" && (
         <div className="flex flex-col items-center gap-4 text-center">
-          <p className="max-w-sm text-sm text-muted-500">
-            {state.errorMessage}
-          </p>
+          <p className="max-w-sm text-sm text-muted-500">{state.errorMessage}</p>
           <button
             type="button"
             onClick={() => dispatch({ type: "RESET" })}
@@ -206,7 +265,7 @@ export default function Conversation() {
         </div>
       )}
 
-      {state.phase === "transcribed" && (
+      {state.phase === "assessed" && state.medicalState && state.triage && (
         <div className="flex w-full flex-col items-center gap-6">
           {state.isFixture && <Badge tone="accent">Fixture — pipeline replay</Badge>}
 
@@ -215,12 +274,19 @@ export default function Conversation() {
             <p className="mt-1">&ldquo;{state.transcript}&rdquo;</p>
           </div>
 
+          {state.agentReply && (
+            <div className="w-full max-w-md rounded-2xl border border-primary-100 bg-primary-50 p-4">
+              <p className="text-xs font-medium text-primary-700">MediVoice</p>
+              <p className="mt-1">{state.agentReply}</p>
+            </div>
+          )}
+
           <LanguageIndicator codes={state.languages} />
           {state.recordedBlob && <AudioPlayer blob={state.recordedBlob} />}
           <Transcript transcript={state.transcript} languages={state.languages} />
 
-          <TriageResult />
-          <ConsultationSummary />
+          <TriageResult triage={state.triage} />
+          <ConsultationSummary medicalState={state.medicalState} triage={state.triage} />
 
           <button
             type="button"

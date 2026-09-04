@@ -64,16 +64,40 @@ verified for real.** Right now:
   it can transcribe anything. Until `SAHARA_API_KEY` is set, every upload
   honestly returns `503 service_not_configured` — the frontend shows this
   as a plain-language banner, never a fake transcript.
-- ⏸️ **Phases 4–14 are deferred** pending real Sahara API docs/credentials:
-  the AI agent, conversation memory, the safety/triage engine, YarnGPT,
-  the full pipeline, facility search, demo/live-mode backend integration,
-  the benchmark harness, UX polish, and end-to-end testing.
+- ✅ **Phase 4 — AI conversation agent (built, LLM-gated)**: a real
+  `ConversationAgent` (`backend/app/services/agent/`) does structured
+  medical-info extraction, intent normalization, and follow-up-question
+  suggestion — same honest pattern as Sahara: **no `LLM_API_KEY` exists in
+  this environment**, so it raises `AgentNotConfiguredError` → `503
+  service_not_configured` (`service: "agent"`) instead of fabricating an
+  extraction.
+- ✅ **Phase 5 — Conversation memory**: `SessionState` now carries the
+  accumulated `MedicalState` and turn history across a conversation, so the
+  agent (once configured) never re-asks something already answered.
+- ✅ **Phase 6 — Safety/triage engine (fully real, no credentials needed)**:
+  `backend/app/services/triage/rules.py` is deterministic keyword-based
+  red-flag detection, independent of the LLM by design. It's wired to a
+  real `POST /api/triage/assess` endpoint and fully unit/endpoint tested.
+- ✅ **Phase 8 (partial) — `/api/conversation/message`**: combines the
+  agent + the (always-real) triage engine + session memory into one
+  endpoint; the safety engine's message overrides the agent's suggested
+  response whenever it recommends emergency care.
+- ⏸️ **Phases 7, 9–14 remain deferred**: YarnGPT voice synthesis, facility
+  search, the full audio→Sahara→agent→YarnGPT pipeline connection, the
+  benchmark harness, UX polish, and end-to-end testing — all blocked on
+  real credentials/docs (Sahara, an LLM provider, YarnGPT, a maps/places
+  API) this environment doesn't have.
 
-A **Demo Mode** exists on `/app` today: it replays one of four scripted
-code-switched scenarios (English+Pidgin, +Yoruba, +Igbo, +Hausa) through
-the same conversation UI a live Sahara response would use, but stays
-visibly labeled **"Fixture — pipeline replay"** throughout — it is not a
-live Sahara call, and the code says so.
+**Demo Mode** on `/app` now runs its four scripted code-switched scenarios
+(English+Pidgin, +Yoruba, +Igbo, +Hausa) through the **real triage engine**:
+each scenario's transcript and a hand-authored `MedicalState` are labeled
+fixtures (no live Sahara/agent call), but the urgency assessment and
+consultation summary shown are genuinely computed by
+`POST /api/triage/assess` — verified end-to-end with a headless-browser
+click-through. The UI keeps a persistent **"Fixture — pipeline replay"**
+badge visible throughout so this is never mistaken for a live pipeline run.
+Live Mode attempts the real pipeline at every step and honestly reports
+whichever service (Sahara, then the agent) isn't configured yet.
 
 The `/benchmark` page shows **"awaiting benchmark run"** rather than any
 number, because no benchmark has actually been executed yet.
@@ -105,6 +129,21 @@ against it later without touching anything downstream. It raises
 whenever `SAHARA_API_KEY` is unset. The actual HTTP request shape is a
 documented placeholder pending real Sahara API docs.
 
+## AI agent & safety/triage engine
+
+`backend/app/services/agent/` — `llm_client.py` (same not-configured
+pattern as Sahara, gated on `LLM_API_KEY`/`LLM_API_URL`),
+`medical_extraction.py` (calls the LLM, merges the result into prior
+session state so answers are never lost), `intent.py` (normalizes onto a
+fixed label set), `response.py` (decides final response text — always
+overridden by the triage engine when it recommends emergency care),
+`conversation.py` (orchestrator).
+
+`backend/app/services/triage/rules.py` — deterministic, keyword-based
+red-flag detection over `MedicalState`, independent of the LLM by design
+(master build prompt §8). Needs no credentials; fully unit-tested and
+live-verified via `/api/triage/assess`.
+
 ## Setup
 
 ### Backend
@@ -130,10 +169,12 @@ Visit `http://localhost:3000`. The frontend expects the backend at
 
 ## Environment variables
 
-See `.env.example` at the repo root. Only `SAHARA_API_KEY`/`SAHARA_API_URL`
-are used by anything today; the rest (`YARNGPT_API_KEY`, `LLM_API_KEY`,
-`FACILITY_API_KEY`, `DATABASE_URL`) are declared for future phases and
-currently unused.
+See `.env.example` at the repo root. `SAHARA_API_KEY`/`SAHARA_API_URL` and
+`LLM_API_KEY`/`LLM_API_URL` are both read today (by the Sahara client and
+the agent's `LLMClient`, respectively) — neither is set in this
+environment, so both honestly report "not configured" rather than working.
+`YARNGPT_API_KEY`, `FACILITY_API_KEY`, and `DATABASE_URL` are declared for
+future phases and currently unused.
 
 ## Project structure
 
@@ -148,14 +189,17 @@ benchmark/   Evaluation dataset scaffold (empty until Phase 12)
 
 - No real speech transcription yet — Sahara isn't configured, and its
   actual API contract hasn't been confirmed against real docs.
-- No AI agent, conversation memory, safety/triage engine, voice synthesis,
-  or facility search yet.
+- No real conversation agent output yet — no LLM provider/key has been
+  chosen or configured, and the request shape in `llm_client.py` is an
+  unconfirmed placeholder.
+- No voice synthesis (YarnGPT) or facility search yet.
 - No persistence — sessions are in-memory and reset when the backend
   restarts.
-- Demo Mode is a labeled fixture replay, not a live pipeline run.
+- Demo Mode's transcript and `MedicalState` are labeled fixtures; only the
+  triage computation on top of them is live.
 
 ## Future work
 
-Phases 4–14 above, in order — most immediately, real Sahara credentials
-and API documentation to unblock Phase 3 verification and everything after
-it.
+Phases 7, 9–14 above, in order — most immediately, real Sahara and LLM
+provider credentials/API documentation to unblock live verification of the
+agent and Sahara integration and everything that depends on them.
