@@ -46,61 +46,51 @@ YarnGPT           — multilingual voice response
 
 ## Current status
 
-This build follows an explicit, incremental phase plan (see
-`## Development phases` below) and **stops as soon as a phase can't be
-verified for real.** Right now:
+The project has two layers that are intentionally **not wired together
+yet** — see `FEATURE_STATUS.md` for the full per-feature breakdown.
 
-- ✅ **Phase 1 — Project structure**: frontend (Next.js) + backend
-  (FastAPI) scaffolded, marketing pages and the real `/app` conversation
-  screen exist, all routes resolve.
-- ✅ **Phase 2 — Audio recording/upload**: `/app` does real push-to-talk
-  microphone recording (`MediaRecorder`) and uploads the real audio Blob to
-  the backend, which validates and stores it.
+### Backend (`backend/`) — real, credential-gated infrastructure
+
+Built in an earlier phase, unchanged and still fully real:
+
+- ✅ **Phase 1–2 — project structure, audio upload**: FastAPI scaffold,
+  `POST /api/voice/process` validates and stores uploaded audio.
 - ✅ **Phase 3 — Sahara integration (built, not yet verifiable live)**: a
-  real `SaharaClient` exists with a `SpeechProvider` interface, but **no
-  Sahara API credentials or documentation exist in this environment.** The
-  client is written against a clearly-marked *placeholder* request/response
-  shape and needs the real Sahara CodeSwitch API contract confirmed before
-  it can transcribe anything. Until `SAHARA_API_KEY` is set, every upload
-  honestly returns `503 service_not_configured` — the frontend shows this
-  as a plain-language banner, never a fake transcript.
+  real `SaharaClient`/`SpeechProvider` exists, but no Sahara API
+  credentials or documentation exist in this environment — it honestly
+  returns `503 service_not_configured` rather than a fake transcript.
 - ✅ **Phase 4 — AI conversation agent (built, LLM-gated)**: a real
-  `ConversationAgent` (`backend/app/services/agent/`) does structured
-  medical-info extraction, intent normalization, and follow-up-question
-  suggestion — same honest pattern as Sahara: **no `LLM_API_KEY` exists in
-  this environment**, so it raises `AgentNotConfiguredError` → `503
-  service_not_configured` (`service: "agent"`) instead of fabricating an
-  extraction.
-- ✅ **Phase 5 — Conversation memory**: `SessionState` now carries the
-  accumulated `MedicalState` and turn history across a conversation, so the
-  agent (once configured) never re-asks something already answered.
+  `ConversationAgent` does structured extraction/intent/follow-up
+  suggestion, gated on `LLM_API_KEY` (also unset here) with the same
+  honest-failure pattern.
+- ✅ **Phase 5 — Conversation memory**: `SessionState` carries accumulated
+  `MedicalState` + turn history.
 - ✅ **Phase 6 — Safety/triage engine (fully real, no credentials needed)**:
-  `backend/app/services/triage/rules.py` is deterministic keyword-based
-  red-flag detection, independent of the LLM by design. It's wired to a
-  real `POST /api/triage/assess` endpoint and fully unit/endpoint tested.
-- ✅ **Phase 8 (partial) — `/api/conversation/message`**: combines the
-  agent + the (always-real) triage engine + session memory into one
-  endpoint; the safety engine's message overrides the agent's suggested
-  response whenever it recommends emergency care.
-- ⏸️ **Phases 7, 9–14 remain deferred**: YarnGPT voice synthesis, facility
-  search, the full audio→Sahara→agent→YarnGPT pipeline connection, the
-  benchmark harness, UX polish, and end-to-end testing — all blocked on
-  real credentials/docs (Sahara, an LLM provider, YarnGPT, a maps/places
-  API) this environment doesn't have.
+  deterministic keyword-based red-flag detection, unit/endpoint tested.
+- ✅ **Phase 8 (partial)** — `/api/conversation/message` combines agent +
+  triage + memory, with triage always overriding the agent during an
+  emergency.
+- ⏸️ **Phases 7, 9, 12–14 remain deferred**: YarnGPT, facility search, the
+  benchmark harness, and full e2e testing — blocked on real credentials
+  this environment doesn't have.
 
-**Demo Mode** on `/app` now runs its four scripted code-switched scenarios
-(English+Pidgin, +Yoruba, +Igbo, +Hausa) through the **real triage engine**:
-each scenario's transcript and a hand-authored `MedicalState` are labeled
-fixtures (no live Sahara/agent call), but the urgency assessment and
-consultation summary shown are genuinely computed by
-`POST /api/triage/assess` — verified end-to-end with a headless-browser
-click-through. The UI keeps a persistent **"Fixture — pipeline replay"**
-badge visible throughout so this is never mistaken for a live pipeline run.
-Live Mode attempts the real pipeline at every step and honestly reports
-whichever service (Sahara, then the agent) isn't configured yet.
+### Frontend (`frontend/`) — mock-only product simulation
 
-The `/benchmark` page shows **"awaiting benchmark run"** rather than any
-number, because no benchmark has actually been executed yet.
+A separate, later phase: **the entire authenticated product
+(`/app/*`)** — dashboard, voice consultation, triage checker, facilities,
+history, language settings, research, profile, settings — was rebuilt as a
+complete, navigable mock product per a later product-simulation brief. It
+runs on `services/mock*.ts` / `lib/mock/*.ts`, not on the backend above —
+no `fetch()` calls to `localhost:8000` happen anywhere in this phase, so
+the product works standalone. Real login/signup, real Sahara transcription,
+real LLM reasoning, real facility search, and a real benchmark run are all
+still outstanding; `FEATURE_STATUS.md` maps each mock service to exactly
+what replacing it with the code above will involve.
+
+Verified end-to-end with a headless-browser click-through: signup → login
+→ dashboard → a full 4-turn voice consultation (real microphone capture,
+scripted transcript/replies, real client-side triage logic) → a triage
+assessment matching the backend's own wording exactly.
 
 ## Development phases
 
@@ -164,8 +154,11 @@ npm install
 npm run dev
 ```
 
-Visit `http://localhost:3000`. The frontend expects the backend at
-`http://localhost:8000` (`NEXT_PUBLIC_API_BASE_URL`).
+Visit `http://localhost:3000`. The backend does **not** need to be running
+for the current mock-only product — see "Current status" above and
+`FEATURE_STATUS.md`. `NEXT_PUBLIC_API_BASE_URL` (default
+`http://localhost:8000`) only matters once mock services start being
+swapped for real `fetch()` calls in `lib/api.ts`.
 
 ## Environment variables
 
@@ -179,11 +172,19 @@ future phases and currently unused.
 ## Project structure
 
 ```
-frontend/    Next.js + TypeScript — marketing pages + the /app conversation screen
-backend/     FastAPI — voice upload, Sahara client, stubbed routers for
-             phases not yet built
+frontend/    Next.js + TypeScript
+             (marketing)/  public site — home, how it works, research, about
+             login/, signup/   mock auth
+             app/              authenticated product (dashboard, consultation,
+                                triage, facilities, history, language, research,
+                                profile, settings) — mock-only, see FEATURE_STATUS.md
+backend/     FastAPI — voice upload, Sahara client, agent, triage engine,
+             stubbed routers for phases not yet built (not called by the
+             frontend during the current mock-only phase)
 benchmark/   Evaluation dataset scaffold (empty until Phase 12)
 ```
+
+See `FEATURE_STATUS.md` for the feature-by-feature mock → real mapping.
 
 ## Limitations
 
@@ -197,6 +198,10 @@ benchmark/   Evaluation dataset scaffold (empty until Phase 12)
   restarts.
 - Demo Mode's transcript and `MedicalState` are labeled fixtures; only the
   triage computation on top of them is live.
+- The authenticated app (`/app/*`) currently runs entirely on mock
+  services (no `fetch()` calls to the backend at all) — see
+  `FEATURE_STATUS.md`. Authentication, voice input/output, conversation
+  reasoning, facility search, and benchmark results are all mocked there.
 
 ## Future work
 

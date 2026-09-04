@@ -52,3 +52,28 @@ body {
   background: var(--color-primary-200);
   color: var(--color-primary-900);
 }
+
+@keyframes waveform-bar {
+  0%, 100% { transform: scaleY(0.3); }
+  50% { transform: scaleY(1); }
+}
+
+@keyframes mic-pulse {
+  0% { box-shadow: 0 0 0 0 rgba(15, 92, 78, 0.35); }
+  100% { box-shadow: 0 0 0 16px rgba(15, 92, 78, 0); }
+}
+
+.animate-waveform-bar {
+  animation: waveform-bar 0.9s ease-in-out infinite;
+}
+
+.animate-mic-pulse {
+  animation: mic-pulse 1.6s ease-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .animate-waveform-bar,
+  .animate-mic-pulse {
+    animation: none !important;
+  }
+}

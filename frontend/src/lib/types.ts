@@ -1,5 +1,17 @@
-// Shape returned by a successful /api/voice/process call once Sahara is
-// actually configured. Mirrors backend/app/schemas/voice.py::VoiceProcessResponse.
+// Shared pipeline contract types. These mirror the REAL backend schemas in
+// backend/app/schemas/*.py exactly on purpose (master build prompt: "the
+// interfaces should already match the eventual architecture") — the mock
+// services in services/mock*.ts return data shaped like this, so swapping
+// a mock service for a real fetch() against the FastAPI backend later is a
+// near drop-in replacement, not a rewrite.
+//
+// During this mock-only product phase, nothing here is sent over the
+// network — see services/mock*.ts and lib/mock/*.ts for the actual mock
+// implementations. lib/api.ts (the real fetch client built in an earlier
+// phase) is left in place, unused, as the reference for wiring these
+// contracts up for real later.
+
+// Mirrors backend/app/schemas/voice.py::VoiceProcessResponse.
 export interface SaharaResult {
   transcript: string;
   languages: string[];
@@ -55,27 +67,3 @@ export type ConversationMessageOutcome =
   | { kind: "assessed"; result: ConversationMessageResult }
   | { kind: "not_configured"; error: ServiceNotConfiguredError }
   | { kind: "error"; message: string };
-
-export type ConversationPhase =
-  | "idle"
-  | "recording"
-  | "uploading"
-  | "assessing"
-  | "assessed"
-  | "not_configured"
-  | "error";
-
-export interface DemoFixture {
-  id: string;
-  title: string;
-  languages: string[];
-  result: SaharaResult;
-  // Fixture — pipeline replay: hand-authored, labeled data representing
-  // what the real agent (Phase 4) would have extracted from this scripted
-  // transcript. Sent to the REAL /api/triage/assess endpoint (Phase 6,
-  // which needs no credentials) so the triage outcome shown for a demo
-  // scenario is genuinely computed, not fabricated — only the
-  // transcript/medicalState inputs are fixtures.
-  medicalState: MedicalState;
-  agentReply: string;
-}

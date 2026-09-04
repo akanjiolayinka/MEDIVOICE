@@ -1,3 +1,9 @@
+// Real backend client (built while the backend was worked on directly).
+// NOT used anywhere during the current mock-only product phase — the app
+// runs entirely on services/mock*.ts and lib/mock/*.ts instead, so the
+// product works standalone without the FastAPI backend running. Kept here
+// as the reference implementation for wiring each mock service up to the
+// real backend one at a time later (see FEATURE_STATUS.md).
 import type {
   ConversationMessageOutcome,
   MedicalState,
