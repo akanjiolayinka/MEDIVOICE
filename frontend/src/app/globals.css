@@ -1,0 +1,54 @@
+@import "tailwindcss";
+
+:root {
+  --background: #fbf9f4;
+  --foreground: #161613;
+
+  --color-primary-50: #eaf3f1;
+  --color-primary-100: #cfe4df;
+  --color-primary-200: #a3ccc2;
+  --color-primary-600: #0f5c4e;
+  --color-primary-700: #0b453a;
+  --color-primary-900: #062720;
+
+  --color-accent-100: #f3ded0;
+  --color-accent-400: #d9945f;
+  --color-accent-600: #c97c4b;
+  --color-accent-700: #a36036;
+
+  --color-muted-100: #f3f1ea;
+  --color-muted-200: #e7e4da;
+  --color-muted-500: #6b6b63;
+}
+
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-inter);
+
+  --color-primary-50: var(--color-primary-50);
+  --color-primary-100: var(--color-primary-100);
+  --color-primary-200: var(--color-primary-200);
+  --color-primary-600: var(--color-primary-600);
+  --color-primary-700: var(--color-primary-700);
+  --color-primary-900: var(--color-primary-900);
+
+  --color-accent-100: var(--color-accent-100);
+  --color-accent-400: var(--color-accent-400);
+  --color-accent-600: var(--color-accent-600);
+  --color-accent-700: var(--color-accent-700);
+
+  --color-muted-100: var(--color-muted-100);
+  --color-muted-200: var(--color-muted-200);
+  --color-muted-500: var(--color-muted-500);
+}
+
+body {
+  background: var(--background);
+  color: var(--foreground);
+}
+
+::selection {
+  background: var(--color-primary-200);
+  color: var(--color-primary-900);
+}
