@@ -1,9 +1,10 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import type { ConsultationRecord } from "@/lib/mock/consultations";
 import UrgencyBadge from "@/components/triage/UrgencyBadge";
-import { CopyIcon, DownloadIcon, PlayIcon, ShareIcon, CheckIcon } from "@/components/icons";
+import { CopyIcon, DownloadIcon, PlayIcon, ShareIcon, CheckIcon, MapPinIcon } from "@/components/icons";
 import { speakMock } from "@/services/mockVoiceOutputService";
 
 function buildSummaryText(record: ConsultationRecord): string {
@@ -120,7 +121,24 @@ export default function ConsultationSummary({ record }: { record: ConsultationRe
         </div>
       </dl>
 
-      <div className="mt-8 flex flex-wrap gap-2 border-t border-muted-200 pt-6">
+      {record.triageUrgency !== "routine" && (
+        <div className="mt-6 rounded-2xl border border-primary-100 bg-primary-50 p-4">
+          <p className="text-sm font-medium text-primary-700">Next step</p>
+          <p className="mt-1 text-sm text-muted-500">
+            {record.triageUrgency === "emergency"
+              ? "This may need urgent attention — find the nearest healthcare facility now."
+              : "It would be worth having this checked by a healthcare professional soon."}
+          </p>
+          <Link
+            href="/app/facilities"
+            className="mt-3 inline-flex items-center gap-1.5 rounded-full bg-primary-600 px-4 py-2 text-sm font-medium text-white hover:bg-primary-700"
+          >
+            <MapPinIcon className="h-4 w-4" /> Find a healthcare facility
+          </Link>
+        </div>
+      )}
+
+      <div className="mt-6 flex flex-wrap gap-2 border-t border-muted-200 pt-6">
         <button
           type="button"
           onClick={() => speakMock(summaryText)}
