@@ -19,7 +19,7 @@ export default function Hero() {
         </p>
 
         <div className="mt-8 flex flex-wrap items-center gap-4">
-          <Button href="/app">Try MediVoice</Button>
+          <Button href="/login">Try MediVoice</Button>
           <Button href="/how-it-works" variant="secondary">
             See how it works
           </Button>

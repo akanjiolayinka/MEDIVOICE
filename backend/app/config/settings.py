@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     # the full set of variables the finished product will need.
     yarngpt_api_key: str | None = None  # Phase 7
     llm_api_key: str | None = None  # Phase 4
+    llm_api_url: str | None = None  # Phase 4
     facility_api_key: str | None = None  # Phase 9
     database_url: str | None = None  # Phase 5+ persistence
 

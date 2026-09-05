@@ -9,7 +9,7 @@ export default function FinalCTA() {
           Have something you need to talk through?
         </h2>
         <p className="mt-2 text-muted-500">Start with your voice.</p>
-        <Button href="/app" className="mt-8">
+        <Button href="/login" className="mt-8">
           Try MediVoice
         </Button>
       </Container>
