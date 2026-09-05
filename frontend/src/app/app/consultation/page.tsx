@@ -1,12 +1,14 @@
 "use client";
 
-import { useReducer, useRef } from "react";
+import { useEffect, useReducer, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Container from "@/components/layout/Container";
 import VoiceRecorder from "@/components/voice/VoiceRecorder";
 import VoiceState, { type VoicePhase } from "@/components/voice/VoiceState";
 import ScenarioPicker from "@/components/conversation/ScenarioPicker";
 import ConversationPanel from "@/components/conversation/ConversationPanel";
+import ModeTabs, { type ConsultationMode } from "@/components/conversation/ModeTabs";
+import NotConfiguredBanner from "@/components/conversation/NotConfiguredBanner";
 import type { DisplayMessage } from "@/components/conversation/Message";
 import TriageCard from "@/components/triage/TriageCard";
 import RedFlagAlert from "@/components/triage/RedFlagAlert";
@@ -17,13 +19,20 @@ import { mockTranscribe, LANGUAGE_NAMES } from "@/services/mockVoiceService";
 import { mockGetNextAgentTurn } from "@/services/mockConversationService";
 import { mockAssessTriage } from "@/services/mockTriageService";
 import { speakMock } from "@/services/mockVoiceOutputService";
-import { addConsultation, buildConsultationRecordFromScenario } from "@/lib/mock/consultations";
+import { uploadVoice, sendMessage } from "@/lib/api";
+import { getOrCreateSessionId } from "@/lib/session";
+import {
+  addConsultation,
+  buildConsultationRecordFromScenario,
+  buildConsultationRecordFromLiveResult,
+} from "@/lib/mock/consultations";
 import type { ConversationTurn } from "@/lib/mock/conversations";
 import type { TriageResult } from "@/lib/types";
 
 type Phase = "idle" | "listening" | "processing" | "preparing" | "speaking" | "completed";
 
 interface State {
+  mode: ConsultationMode;
   scenario: ConversationScenario;
   phase: Phase;
   messages: DisplayMessage[];
@@ -33,17 +42,24 @@ interface State {
   isRedFlag: boolean;
   micErrorMessage: string | null;
   consultationId: string | null;
+  blockedService: string | null;
+  blockedMessage: string | null;
+  liveErrorMessage: string | null;
 }
 
 type Action =
+  | { type: "SET_MODE"; mode: ConsultationMode }
   | { type: "SELECT_SCENARIO"; scenario: ConversationScenario }
   | { type: "SET_PHASE"; phase: Phase }
   | { type: "ADD_MESSAGE"; message: DisplayMessage }
   | { type: "SET_MIC_ERROR"; message: string | null }
+  | { type: "LIVE_BLOCKED"; service: string; message: string }
+  | { type: "LIVE_ERROR"; message: string }
   | { type: "FINALIZE"; triage: TriageResult; isRedFlag: boolean; consultationId: string };
 
-function initialStateFor(scenario: ConversationScenario): State {
+function initialStateFor(scenario: ConversationScenario, mode: ConsultationMode = "demo"): State {
   return {
+    mode,
     scenario,
     phase: "idle",
     messages: [],
@@ -53,13 +69,18 @@ function initialStateFor(scenario: ConversationScenario): State {
     isRedFlag: false,
     micErrorMessage: null,
     consultationId: null,
+    blockedService: null,
+    blockedMessage: null,
+    liveErrorMessage: null,
   };
 }
 
 function reducer(state: State, action: Action): State {
   switch (action.type) {
+    case "SET_MODE":
+      return initialStateFor(state.scenario, action.mode);
     case "SELECT_SCENARIO":
-      return initialStateFor(action.scenario);
+      return initialStateFor(action.scenario, state.mode);
     case "SET_PHASE":
       return { ...state, phase: action.phase };
     case "ADD_MESSAGE":
@@ -71,6 +92,15 @@ function reducer(state: State, action: Action): State {
       };
     case "SET_MIC_ERROR":
       return { ...state, micErrorMessage: action.message };
+    case "LIVE_BLOCKED":
+      return {
+        ...state,
+        phase: "idle",
+        blockedService: action.service,
+        blockedMessage: action.message,
+      };
+    case "LIVE_ERROR":
+      return { ...state, phase: "idle", liveErrorMessage: action.message };
     case "FINALIZE":
       return {
         ...state,
@@ -87,8 +117,17 @@ function reducer(state: State, action: Action): State {
 export default function ConsultationPage() {
   const router = useRouter();
   const { user } = useAuth();
-  const [state, dispatch] = useReducer(reducer, conversationScenarios[0], initialStateFor);
+  const [state, dispatch] = useReducer(
+    reducer,
+    conversationScenarios[0],
+    (scenario) => initialStateFor(scenario),
+  );
   const messageIdRef = useRef(0);
+  const sessionIdRef = useRef("");
+
+  useEffect(() => {
+    sessionIdRef.current = getOrCreateSessionId();
+  }, []);
 
   const nextMessageId = () => `msg-${++messageIdRef.current}`;
 
@@ -96,7 +135,7 @@ export default function ConsultationPage() {
     dispatch({ type: "SELECT_SCENARIO", scenario });
   };
 
-  const runTurn = async (blob: Blob | null) => {
+  const runDemoTurn = async (blob: Blob | null) => {
     void blob; // real audio Blob captured for realism; the mock service doesn't inspect it.
     dispatch({ type: "SET_PHASE", phase: "processing" });
 
@@ -138,11 +177,7 @@ export default function ConsultationPage() {
 
     if (shouldFinalize) {
       const triage = await mockAssessTriage(state.scenario.medicalState);
-      const record = buildConsultationRecordFromScenario(
-        state.scenario,
-        state.scenario.turns,
-        triage,
-      );
+      const record = buildConsultationRecordFromScenario(state.scenario, state.scenario.turns, triage);
       addConsultation(record);
       dispatch({ type: "FINALIZE", triage, isRedFlag: agentTurn.isRedFlag, consultationId: record.id });
     } else {
@@ -150,8 +185,100 @@ export default function ConsultationPage() {
     }
   };
 
-  const voicePhase: VoicePhase =
-    state.phase === "completed" ? "idle" : (state.phase as VoicePhase);
+  /**
+   * Real pipeline: recorded audio -> Sahara (backend/app/services/sahara)
+   * -> the conversation agent (backend/app/services/agent). Each step
+   * honestly reports "not configured" instead of a fake result — neither
+   * SAHARA_API_KEY nor LLM_API_KEY exist in this environment yet, so this
+   * currently stops at the first step. Requires the backend running at
+   * NEXT_PUBLIC_API_BASE_URL (see backend/README setup).
+   */
+  const runLiveTurn = async (blob: Blob | null) => {
+    if (!blob) {
+      dispatch({
+        type: "LIVE_ERROR",
+        message:
+          "Live Mode needs a real recording — try Demo Mode instead, or allow microphone access and try again.",
+      });
+      return;
+    }
+
+    dispatch({ type: "SET_PHASE", phase: "processing" });
+    const voiceOutcome = await uploadVoice(sessionIdRef.current, blob);
+
+    if (voiceOutcome.kind === "not_configured") {
+      dispatch({
+        type: "LIVE_BLOCKED",
+        service: voiceOutcome.error.service,
+        message: voiceOutcome.error.message,
+      });
+      return;
+    }
+    if (voiceOutcome.kind === "error") {
+      dispatch({ type: "LIVE_ERROR", message: voiceOutcome.message });
+      return;
+    }
+
+    dispatch({
+      type: "ADD_MESSAGE",
+      message: {
+        id: nextMessageId(),
+        speaker: "user",
+        text: voiceOutcome.result.transcript,
+        languages: voiceOutcome.result.languages.map((code) => LANGUAGE_NAMES[code] ?? code),
+        timestamp: new Date().toISOString(),
+      },
+    });
+
+    dispatch({ type: "SET_PHASE", phase: "preparing" });
+    const convoOutcome = await sendMessage(sessionIdRef.current, voiceOutcome.result.transcript);
+
+    if (convoOutcome.kind === "not_configured") {
+      dispatch({
+        type: "LIVE_BLOCKED",
+        service: convoOutcome.error.service,
+        message: convoOutcome.error.message,
+      });
+      return;
+    }
+    if (convoOutcome.kind === "error") {
+      dispatch({ type: "LIVE_ERROR", message: convoOutcome.message });
+      return;
+    }
+
+    dispatch({
+      type: "ADD_MESSAGE",
+      message: {
+        id: nextMessageId(),
+        speaker: "agent",
+        text: convoOutcome.result.response_text,
+        timestamp: new Date().toISOString(),
+        isRedFlag: convoOutcome.result.triage.recommend_emergency_care,
+      },
+    });
+
+    if (user?.voicePreferences.autoPlayResponses) {
+      dispatch({ type: "SET_PHASE", phase: "speaking" });
+      await speakMock(convoOutcome.result.response_text, { rate: user.voicePreferences.speakingSpeed });
+    }
+
+    const record = buildConsultationRecordFromLiveResult(
+      voiceOutcome.result.transcript,
+      voiceOutcome.result.languages.map((code) => LANGUAGE_NAMES[code] ?? code),
+      convoOutcome.result.medical_state,
+      convoOutcome.result.triage,
+    );
+    addConsultation(record);
+    dispatch({
+      type: "FINALIZE",
+      triage: convoOutcome.result.triage,
+      isRedFlag: convoOutcome.result.triage.recommend_emergency_care,
+      consultationId: record.id,
+    });
+  };
+
+  const voicePhase: VoicePhase = state.phase === "completed" ? "idle" : (state.phase as VoicePhase);
+  const isBusy = state.phase === "processing" || state.phase === "preparing" || state.phase === "speaking";
 
   return (
     <Container className="flex max-w-2xl flex-col items-center gap-6 py-10">
@@ -162,27 +289,28 @@ export default function ConsultationPage() {
         </p>
       </div>
 
-      <ScenarioPicker
-        scenarios={conversationScenarios}
-        activeId={state.scenario.id}
-        onSelect={handleSelectScenario}
-      />
+      <ModeTabs mode={state.mode} onChange={(mode) => dispatch({ type: "SET_MODE", mode })} />
+
+      {state.mode === "demo" && (
+        <ScenarioPicker
+          scenarios={conversationScenarios}
+          activeId={state.scenario.id}
+          onSelect={handleSelectScenario}
+        />
+      )}
 
       {state.phase !== "completed" && (
         <div className="flex flex-col items-center gap-3 py-4">
           <VoiceRecorder
             isListening={state.phase === "listening"}
-            disabled={state.phase === "processing" || state.phase === "preparing" || state.phase === "speaking"}
+            disabled={isBusy}
             onStart={() => dispatch({ type: "SET_PHASE", phase: "listening" })}
             onStop={(blob) => {
               dispatch({ type: "SET_MIC_ERROR", message: null });
-              void runTurn(blob);
+              void (state.mode === "demo" ? runDemoTurn(blob) : runLiveTurn(blob));
             }}
             onPermissionDenied={() =>
-              dispatch({
-                type: "SET_MIC_ERROR",
-                message: "Microphone access was denied.",
-              })
+              dispatch({ type: "SET_MIC_ERROR", message: "Microphone access was denied." })
             }
           />
           <VoiceState phase={voicePhase} />
@@ -190,15 +318,37 @@ export default function ConsultationPage() {
           {state.micErrorMessage && (
             <div className="mt-2 flex flex-col items-center gap-2 text-center">
               <p className="text-sm text-accent-700">{state.micErrorMessage}</p>
+              {state.mode === "demo" && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    dispatch({ type: "SET_MIC_ERROR", message: null });
+                    void runDemoTurn(null);
+                  }}
+                  className="text-sm font-medium text-primary-700 hover:text-primary-900"
+                >
+                  Continue without microphone →
+                </button>
+              )}
+            </div>
+          )}
+
+          {state.mode === "live" && state.liveErrorMessage && (
+            <p className="mt-2 max-w-sm text-center text-sm text-accent-700">{state.liveErrorMessage}</p>
+          )}
+
+          {state.mode === "live" && state.blockedService && (
+            <div className="mt-2 flex flex-col items-center gap-3">
+              <NotConfiguredBanner
+                service={state.blockedService}
+                message={state.blockedMessage ?? "This service isn't configured yet."}
+              />
               <button
                 type="button"
-                onClick={() => {
-                  dispatch({ type: "SET_MIC_ERROR", message: null });
-                  void runTurn(null);
-                }}
+                onClick={() => dispatch({ type: "SET_MODE", mode: "demo" })}
                 className="text-sm font-medium text-primary-700 hover:text-primary-900"
               >
-                Continue without microphone →
+                Try the demo instead →
               </button>
             </div>
           )}
@@ -217,7 +367,7 @@ export default function ConsultationPage() {
             <Button href={`/app/summary/${state.consultationId}`}>View consultation summary</Button>
             <Button
               variant="secondary"
-              onClick={() => dispatch({ type: "SELECT_SCENARIO", scenario: state.scenario })}
+              onClick={() => dispatch({ type: "SET_MODE", mode: state.mode })}
             >
               Start a new consultation
             </Button>

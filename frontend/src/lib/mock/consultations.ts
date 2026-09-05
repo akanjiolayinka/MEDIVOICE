@@ -1,5 +1,5 @@
 import type { ConversationScenario, ConversationTurn } from "@/lib/mock/conversations";
-import type { TriageResult, Urgency } from "@/lib/types";
+import type { MedicalState, TriageResult, Urgency } from "@/lib/types";
 
 export interface ConsultationRecord {
   id: string;
@@ -108,6 +108,40 @@ export function getConsultationById(id: string): ConsultationRecord | undefined 
 export function addConsultation(record: ConsultationRecord): void {
   const stored = readStoredConsultations();
   writeStoredConsultations([record, ...stored]);
+}
+
+/**
+ * Builds a ConsultationRecord from a REAL Sahara transcript + a REAL
+ * agent/triage result (backend/app/api/conversation.py's response) — used
+ * once Live Mode's chain actually succeeds end to end. Distinct from
+ * buildConsultationRecordFromScenario, which is fed Demo Mode's labeled
+ * fixture data instead.
+ */
+export function buildConsultationRecordFromLiveResult(
+  transcript: string,
+  languages: string[],
+  medicalState: MedicalState,
+  triage: TriageResult,
+): ConsultationRecord {
+  return {
+    id: crypto.randomUUID(),
+    date: new Date().toISOString(),
+    mainConcern: medicalState.symptoms[0]
+      ? [medicalState.symptoms[0], ...medicalState.symptoms.slice(1, 2)].join(" and ").toLowerCase()
+      : "Voice consultation",
+    languages,
+    symptoms: medicalState.symptoms,
+    additionalSymptoms: medicalState.additional_symptoms,
+    duration: medicalState.duration || "Not specified",
+    severity: medicalState.severity || "Not specified",
+    temperature: medicalState.temperature || undefined,
+    triageUrgency: triage.urgency,
+    triageMessage: triage.message,
+    redFlags: triage.red_flags,
+    status: "completed",
+    conversationNotes: medicalState.relevant_context,
+    turns: [{ speaker: "user", text: transcript, detectedLanguages: languages }],
+  };
 }
 
 export function buildConsultationRecordFromScenario(

@@ -74,23 +74,34 @@ Built in an earlier phase, unchanged and still fully real:
   benchmark harness, and full e2e testing — blocked on real credentials
   this environment doesn't have.
 
-### Frontend (`frontend/`) — mock-only product simulation
+### Frontend (`frontend/`) — mock product, now being wired to the backend
 
-A separate, later phase: **the entire authenticated product
-(`/app/*`)** — dashboard, voice consultation, triage checker, facilities,
-history, language settings, research, profile, settings — was rebuilt as a
-complete, navigable mock product per a later product-simulation brief. It
-runs on `services/mock*.ts` / `lib/mock/*.ts`, not on the backend above —
-no `fetch()` calls to `localhost:8000` happen anywhere in this phase, so
-the product works standalone. Real login/signup, real Sahara transcription,
-real LLM reasoning, real facility search, and a real benchmark run are all
-still outstanding; `FEATURE_STATUS.md` maps each mock service to exactly
-what replacing it with the code above will involve.
+**The entire authenticated product (`/app/*`)** — dashboard, voice
+consultation, triage checker, facilities, history, language settings,
+research, profile, settings — was rebuilt as a complete, navigable mock
+product per a later product-simulation brief, running on `services/mock*.ts`
+/ `lib/mock/*.ts` with no backend calls at all. That's still true for
+**Demo Mode** and for every other feature in the app; `FEATURE_STATUS.md`
+maps each remaining mock service to exactly what replacing it involves.
 
-Verified end-to-end with a headless-browser click-through: signup → login
-→ dashboard → a full 4-turn voice consultation (real microphone capture,
-scripted transcript/replies, real client-side triage logic) → a triage
-assessment matching the backend's own wording exactly.
+**Live Mode on `/app/consultation` is now wired to the real backend**: it
+records real audio, posts it to the real `POST /api/voice/process`
+(Sahara), and chains into the real `POST /api/conversation/message`
+(agent + triage) if that succeeds. Since neither `SAHARA_API_KEY` nor
+`LLM_API_KEY` exist in this environment, Live Mode correctly stops at
+Sahara with an honest "not configured" banner — verified live, including a
+real fix along the way: the backend's audio-format check rejected real
+browsers' `audio/webm;codecs=opus` content type (it only matched the bare
+`audio/webm`), which would have silently broken Live Mode the moment Sahara
+*was* configured. **Running Live Mode locally requires the backend running**
+(`cd backend && uvicorn app.main:app --reload`); Demo Mode does not.
+
+Verified end-to-end with headless-browser click-throughs: signup → login →
+dashboard → a full 4-turn Demo Mode voice consultation (real microphone
+capture, scripted transcript/replies, real client-side triage logic) → a
+triage assessment matching the backend's own wording exactly; the emergency
+scenario correctly reaching `RedFlagAlert`; Live Mode's real recording
+reaching the real backend and getting back a real, honest 503.
 
 ## Development phases
 
